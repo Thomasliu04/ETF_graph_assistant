@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+runs/
+.idea/
+data/
+output/
+result/
+_backup_before_refactor_*/
+.DS_Store
