@@ -2,6 +2,11 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    from .contracts import META
+except ImportError:
+    from contracts import META
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -55,10 +60,12 @@ class AppConfig:
     csv_path: Path = PROJECT_ROOT / "data" / "etf底表.csv"
     skill_path: Path = PROJECT_ROOT / "skills.md"
     review_skill_path: Path = PROJECT_ROOT / "skill_check.md"
-    sheet_name: str = "260630股票etf底表"
-    period_start: str = "2025-12-31"
-    period_end: str = "2026-06-30"
-    target_company: str = "银华基金"
+    # 口径默认值来自数据契约；可用同名字段覆盖（例如测试时注入）
+    sheet_name: str = META.sheet_name
+    period_start: str = META.period_start
+    period_end: str = META.period_end
+    target_company: str = META.target_company
+    data_contract_version: str = META.version
     api_type: str = env_str("ETF_AI_API_TYPE", "aliyun")
     model_name: str = env_str("ETF_AI_MODEL_NAME", "qwen3.7-plus")
     base_url: str = env_str(
