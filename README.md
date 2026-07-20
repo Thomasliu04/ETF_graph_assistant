@@ -307,112 +307,32 @@ PY
 
 ## 扩展新的聚合计算
 
-标准聚合已经抽象为 `AggregationSpec`。如果新计算只是基于底表字段做 `groupby + sum + 衍生指标`，只需在 `scripts/contracts/aggregations.py` 的 `AGGREGATION_SPECS` 中新增规格，并尽量使用 `BaseCols` / `AggCols`，避免魔法字符串。
+**非开发同学（推荐）**：打开 `configs/聚合登记表.xlsx`，在「标准聚合」sheet **新增一行**（不要改「是否内置=是」的四行），保存后重启 Web / 再跑一键分析。  
+详细步骤见 [`docs/如何新增一张聚合表.md`](docs/如何新增一张聚合表.md)。
 
-### 新增单字段聚合
+系统会把登记表行转成 `AggregationSpec`，仍调用现有的 `calc_aggregation`（groupby + 求和 + 增速 + 可选排名/TOP），**不会改旧表算法**。登记表损坏时自动回退到代码内置四表。
 
-例如，按 `是否国家队` 聚合（项目中已注册为 `national_team`，可作模板）：
+网页「概览 → 已加载聚合」可确认新表是否加载成功。
 
-```python
-from scripts.contracts import AggregationSpec, BaseCols, AggCols
+### 开发同学：复杂切片
 
-"national_team": AggregationSpec(
-    name="national_team",
-    sheet_name="国家队汇总",
-    csv_name="national_team_agg.csv",
-    group_cols=[BaseCols.NATIONAL_TEAM],
-    rename_map={BaseCols.NATIONAL_TEAM: AggCols.NATIONAL_TEAM},
-)
-```
+若不是「按底表某一列汇总」（例如目标公司筛选/多表拼接），请在 `scripts/calculations/` 新增计算模块，并继续用 `EXTRA_TABLE_SPECS` 登记导出元数据。目标公司逻辑本轮保持不变。
 
-然后在 `scripts/main.py` / `web.py` 的执行列表中加入该名字：
+### 兼容说明（旧 Python 注册方式）
 
-```python
-agg_tables = calc.calc_registered_aggs(["area", "track", "manager", "national_team"])
-```
+标准聚合的代码回退源仍在 `scripts/contracts/aggregations.py` 的 `BUILTIN_AGGREGATION_SPECS`。日常扩展请优先改 Excel 登记表，避免两套配置漂移。
 
-这样会自动：
+### 新增带 TOP 产品的聚合（Excel）
 
-- 在 Excel 中新增对应 sheet
-- 在运行留痕中新增 `runs/{run_id}/tables/<csv_name>`
-- 在 `run_manifest.json` 中记录该表
-- 按契约检查输出列是否齐全
-
-### 新增带 TOP 产品的聚合
-
-例如，新增按某分组字段聚合，并提取增量 TOP3 产品：
-
-```python
-from scripts.contracts import AggregationSpec, BaseCols
-
-"location": AggregationSpec(
-    name="location",
-    sheet_name="所在区域汇总",
-    csv_name="location_agg.csv",
-    group_cols=["所在区域"],  # 若该列已进入契约，改为 BaseCols.XXX
-    rename_map={"所在区域": "所在区域"},
-    include_top_products=True,
-)
-```
-
-默认 TOP 产品按底表 `增量26H1`（`BaseCols.DELTA`）从高到低排序，默认取 TOP3：
-
-```python
-include_top_products=True,
-top_n=5,
-top_sort_col=BaseCols.DELTA,
-```
-
-### 新增多字段联合聚合
-
-例如，新增 `基金公司 + 赛道` 联合聚合：
-
-```python
-from scripts.contracts import AggregationSpec, BaseCols, AggCols
-
-"manager_track": AggregationSpec(
-    name="manager_track",
-    sheet_name="管理人赛道汇总",
-    csv_name="manager_track_agg.csv",
-    group_cols=[BaseCols.MANAGER, BaseCols.TRACK],
-    rename_map={
-        BaseCols.MANAGER: AggCols.MANAGER,
-        BaseCols.TRACK: AggCols.TRACK_TYPE,
-    },
-    include_top_products=True,
-)
-```
-
-多字段聚合也支持 TOP 产品，程序会按所有分组字段共同筛选对应产品。
-
-### 什么时候不要用 AggregationSpec
-
-如果计算逻辑不是标准 groupby，例如：
-
-- 环比 / 同比趋势
-- 分位数排名
-- 集中度指标
-- 银华 vs 行业均值对标
-- 多期时间序列分析
-
-建议新增独立计算模块，而不是硬塞进 `AggregationSpec`。推荐放在：
-
-```text
-scripts/calculations/
-```
-
-并让该模块输出一个标准 `DataFrame`，再交给导出和 AI 层使用。
+在登记表对应行将「是否TOP产品」设为「是」，「TOP数量」填 `3` 即可。
 
 ### 让 AI 分析新增表
 
-新增聚合表后，如果希望 AI 使用这张表，需要同步修改：
+登记表中将「送给AI」设为「是」，并填写「AI标题」「AI顺序」「报告章节」。若还需要模型「怎么写分析话术」，再在 `skills.md` / `skill_check.md` 补一两句业务说明。
 
-- `skills.md`：说明新表字段、口径和分析任务
-- `skill_check.md`：说明新表的审核规则
-- `scripts/ai_analyst.py`：把新表拼进分析 Prompt
-- `scripts/review_ai.py`：把新表拼进审核 Prompt
+### 什么时候不要用登记表 / AggregationSpec
 
-如果只是先做数据计算和 Excel 导出，不需要修改 AI 相关文件。
+如果计算逻辑不是标准 groupby，例如环比趋势、分位数、集中度、多期时间序列，或目标公司类筛选拼接，请在 `scripts/calculations/` 由开发新增模块，而不是硬塞进登记表。
 
 ## 回退与备份
 

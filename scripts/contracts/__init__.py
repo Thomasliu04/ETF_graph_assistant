@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from .aggregations import (
     AGGREGATION_SPECS,
+    BUILTIN_AGGREGATION_SPECS,
     CORE_METRIC_COLUMNS,
     EXTRA_TABLE_SPECS,
     SORTABLE_COLUMNS,
@@ -34,14 +35,30 @@ from .base_table import (
     normalize_column_name,
 )
 from .meta import META, DataContractMeta
+from .table_plugins import (
+    analysis_table_order,
+    default_agg_names,
+    ensure_plugins_loaded,
+    get_load_info,
+    get_plugins,
+    plugin_catalog_rows,
+    section_table_keys_from_registry,
+    write_registry_excel,
+)
 
 
 def contract_manifest() -> dict:
     """写入 run_manifest，便于审计本次运行使用的口径版本。"""
+    ensure_plugins_loaded()
+    info = get_load_info()
     return {
         "data_contract_version": META.version,
         "meta": META.as_dict(),
         "base_fields": field_catalog(),
+        "aggregation_registry": {
+            "source": info["source"],
+            "warnings": info["warnings"],
+        },
         "aggregation_specs": {
             name: {
                 "sheet_name": spec.sheet_name,
@@ -73,6 +90,7 @@ def contract_manifest() -> dict:
 __all__ = [
     "AGGREGATION_SPECS",
     "BALANCE_RULES",
+    "BUILTIN_AGGREGATION_SPECS",
     "COLUMN_ALIASES",
     "CORE_METRIC_COLUMNS",
     "EXTRA_TABLE_SPECS",
@@ -90,11 +108,19 @@ __all__ = [
     "BaseCols",
     "DataContractMeta",
     "TableExportSpec",
+    "analysis_table_order",
     "contract_manifest",
+    "default_agg_names",
+    "ensure_plugins_loaded",
     "field_catalog",
+    "get_load_info",
+    "get_plugins",
     "get_table_description",
     "get_table_export_meta",
     "normalize_column_name",
+    "plugin_catalog_rows",
     "register_aggregation_spec",
+    "section_table_keys_from_registry",
     "validate_agg_schema",
+    "write_registry_excel",
 ]

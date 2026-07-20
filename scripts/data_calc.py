@@ -24,6 +24,8 @@ try:
         normalize_column_name,
         register_aggregation_spec as register_contract_aggregation_spec,
         validate_agg_schema,
+        default_agg_names,
+        ensure_plugins_loaded,
     )
     from .calculations import TargetCompanyCalculator
     from .run_context import RunContext
@@ -47,6 +49,8 @@ except ImportError:
         normalize_column_name,
         register_aggregation_spec as register_contract_aggregation_spec,
         validate_agg_schema,
+        default_agg_names,
+        ensure_plugins_loaded,
     )
     from calculations import TargetCompanyCalculator
     from run_context import RunContext
@@ -165,10 +169,12 @@ class ETFDataCalculator:
         return agg_df
 
     def calc_registered_aggs(self, names: list[str] | None = None) -> dict[str, pd.DataFrame]:
-        target_names = names or list(AGGREGATION_SPECS.keys())
+        ensure_plugins_loaded()
+        target_names = names or default_agg_names()
         return {name: self.calc_aggregation(name) for name in target_names}
 
     def get_aggregation_spec(self, spec_or_name: AggregationSpec | str) -> AggregationSpec:
+        ensure_plugins_loaded()
         if isinstance(spec_or_name, AggregationSpec):
             return spec_or_name
         if spec_or_name not in AGGREGATION_SPECS:
@@ -243,7 +249,8 @@ class ETFDataCalculator:
         target_company: str | None = None,
     ) -> dict[str, pd.DataFrame]:
         """标准聚合 + 目标公司切片，供导出与 AI 使用。"""
-        names = agg_names or ["area", "track", "manager", "national_team"]
+        ensure_plugins_loaded()
+        names = agg_names or default_agg_names()
         tables = self.calc_registered_aggs(names)
         if include_target_company:
             tables.update(

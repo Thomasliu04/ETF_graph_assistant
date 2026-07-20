@@ -2,27 +2,32 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 
 try:
     from .ai_analyst import ETFAIAnalyst
     from .config import AppConfig
+    from .contracts import default_agg_names, ensure_plugins_loaded
     from .data_calc import ETFDataCalculator
-    from .review_ai import AIReviewer
+    from .report_sections import normalize_section_keys
+    from .review_ai import AIReviewer, extract_review_payload
     from .run_context import RunContext
     from .visual_plot import ETFVisualizer
 except ImportError:
     from ai_analyst import ETFAIAnalyst
     from config import AppConfig
+    from contracts import default_agg_names, ensure_plugins_loaded
     from data_calc import ETFDataCalculator
-    from review_ai import AIReviewer
+    from report_sections import normalize_section_keys
+    from review_ai import AIReviewer, extract_review_payload
     from run_context import RunContext
     from visual_plot import ETFVisualizer
 
+# 兼容旧引用；运行时以 default_agg_names() 为准
 DEFAULT_AGG_NAMES = ["area", "track", "manager", "national_team"]
 
 
@@ -58,10 +63,9 @@ def format_user_error(exc: Exception) -> str:
 
 
 def extract_review_score(review_text: str) -> int | None:
-    match = re.search(r"总分[:：]\s*(\d+)", review_text or "")
-    if not match:
-        return None
-    return int(match.group(1))
+    """兼容旧接口：优先结构化 JSON，再回退正文总分。"""
+    payload = extract_review_payload(review_text)
+    return payload.get("score")
 
 
 def build_run_context(config: AppConfig, source_xlsx: Path | None = None) -> RunContext:
@@ -79,6 +83,9 @@ def build_run_context(config: AppConfig, source_xlsx: Path | None = None) -> Run
             "model_name": config.model_name,
             "base_url": config.base_url,
             "max_retry_times": config.max_retry_times,
+            "pass_score": config.pass_score,
+            "max_revise_rounds": config.max_revise_rounds,
+            "min_score_gain": config.min_score_gain,
             "request_timeout": config.request_timeout,
             "request_retries": config.request_retries,
         },
@@ -108,9 +115,10 @@ def compute_tables(
     run_context: RunContext | None = None,
     agg_names: list[str] | None = None,
 ) -> dict[str, pd.DataFrame]:
+    ensure_plugins_loaded()
     calc = ETFDataCalculator(base_csv_path=str(csv_path), run_context=run_context)
     tables = calc.calc_analysis_tables(
-        agg_names=agg_names or DEFAULT_AGG_NAMES,
+        agg_names=agg_names or default_agg_names(),
         include_target_company=True,
         target_company=config.target_company,
     )
@@ -135,7 +143,18 @@ def run_ai_with_review(
     tables: dict[str, pd.DataFrame],
     api_key: str,
     run_context: RunContext | None = None,
+    on_progress: Callable[[str, float], None] | None = None,
 ) -> tuple[str, str, int | None]:
+    """
+    生成 → 结构化审核 →（必要时）章节局部改写 / 一次全文反馈改写 → 增量复审。
+    保留历史最高分版本；达标、无增益或达到改写轮数上限时结束。
+
+    on_progress(message, fraction): fraction 为 0~1，表示 AI 阶段内部进度。
+    """
+    def _progress(message: str, fraction: float) -> None:
+        if on_progress is not None:
+            on_progress(message, max(0.0, min(1.0, fraction)))
+
     analyst = ETFAIAnalyst(
         api_key=api_key,
         model_name=config.model_name,
@@ -144,6 +163,7 @@ def run_ai_with_review(
         timeout=config.request_timeout,
         max_retries=config.request_retries,
         run_context=run_context,
+        target_company=config.target_company,
     )
     reviewer = AIReviewer(
         api_key=api_key,
@@ -154,32 +174,189 @@ def run_ai_with_review(
         run_context=run_context,
     )
 
-    retry_count = 0
-    final_report = ""
-    final_review = ""
-    review_score: int | None = None
+    pass_score = config.pass_score
+    max_revise_rounds = max(0, config.max_revise_rounds)
+    min_score_gain = max(0, config.min_score_gain)
 
-    while retry_count <= config.max_retry_times:
-        final_report = analyst.run_analysis(tables)
-        final_review = reviewer.run_review(final_report, tables)
-        review_score = extract_review_score(final_review)
+    loop_log: list[dict] = []
+    best_report = ""
+    best_review = ""
+    best_score: int | None = None
+    best_payload: dict = {}
 
-        if review_score is None:
-            # 解析失败：允许有限次重跑，避免静默给 50 分
-            if retry_count < config.max_retry_times:
-                retry_count += 1
-                continue
+    _progress("3.1/4 准备生成：组装数据与写作 Prompt…", 0.02)
+    _progress("3.1/4 已提交全文生成请求，等待模型返回（通常最耗时）…", 0.08)
+    current_report = analyst.run_analysis(tables)
+    _progress("3.1/4 全文报告已生成，准备送审…", 0.38)
+
+    _progress("3.2/4 已提交全量审核请求，等待打分与错误清单…", 0.42)
+    current_review = reviewer.run_review(current_report, tables)
+    current_payload = extract_review_payload(current_review)
+    current_score = current_payload.get("score")
+
+    def _remember(mode: str, report: str, review: str, payload: dict, score: int | None) -> None:
+        entry = {
+            "attempt": len(loop_log),
+            "mode": mode,
+            "score": score,
+            "failed_sections": list(payload.get("failed_sections") or []),
+            "parse_ok": bool(payload.get("parse_ok")),
+        }
+        loop_log.append(entry)
+        nonlocal best_report, best_review, best_score, best_payload
+        if score is None:
+            if best_score is None and not best_report:
+                best_report, best_review, best_payload = report, review, payload
+            return
+        if best_score is None or score > best_score:
+            best_report, best_review, best_score, best_payload = report, review, score, payload
+
+    _remember("generate", current_report, current_review, current_payload, current_score)
+    if current_score is not None and current_score >= pass_score:
+        _progress(f"3.2/4 审核已达标（{current_score}分），无需改写", 0.95)
+    else:
+        score_label = str(current_score) if current_score is not None else "未解析"
+        _progress(f"3.2/4 首轮得分 {score_label}（未达标），进入改写循环…", 0.48)
+
+    revise_rounds = 0
+    full_revise_used = False
+    prev_score_for_gain = current_score
+
+    while True:
+        if current_score is not None and current_score >= pass_score:
+            break
+        if revise_rounds >= max_revise_rounds:
+            _progress(
+                f"3.3/4 已达改写上限（{max_revise_rounds} 轮），停止改写",
+                0.88,
+            )
             break
 
-        if review_score >= 80:
-            break
-        if retry_count < config.max_retry_times:
-            retry_count += 1
-            continue
-        break
+        failed_sections = normalize_section_keys(current_payload.get("failed_sections") or [])
+        if not failed_sections:
+            failed_sections = normalize_section_keys(
+                [
+                    err.get("section")
+                    for err in (current_payload.get("errors") or [])
+                    if isinstance(err, dict)
+                ]
+            )
 
-    if run_context is not None and review_score is not None:
-        run_context.record_value("final_review_score", review_score)
+        mode = "section_revise"
+        round_no = revise_rounds + 1
+        # 改写阶段占用约 0.50~0.90
+        base = 0.50 + 0.18 * revise_rounds / max(max_revise_rounds, 1)
+        try:
+            if failed_sections:
+                sec = "、".join(failed_sections)
+                _progress(
+                    f"3.3/4 第 {round_no} 轮局部改写：{sec}（已提交，等待模型）…",
+                    base,
+                )
+                current_report = analyst.revise_sections(
+                    tables,
+                    current_report,
+                    current_payload,
+                    section_keys=failed_sections,
+                )
+                changed = failed_sections
+                _progress(f"3.3/4 第 {round_no} 轮局部改写完成", base + 0.06)
+            elif not full_revise_used:
+                _progress(
+                    f"3.3/4 第 {round_no} 轮全文反馈改写（已提交，等待模型）…",
+                    base,
+                )
+                current_report = analyst.revise_full_with_feedback(
+                    tables, current_report, current_payload
+                )
+                changed = ["area", "track", "manager", "target"]
+                full_revise_used = True
+                mode = "full_revise"
+                _progress(f"3.3/4 第 {round_no} 轮全文改写完成", base + 0.06)
+            else:
+                break
+        except ValueError:
+            if not full_revise_used:
+                _progress(
+                    f"3.3/4 第 {round_no} 轮全文反馈改写（已提交，等待模型）…",
+                    base,
+                )
+                current_report = analyst.revise_full_with_feedback(
+                    tables, current_report, current_payload
+                )
+                changed = ["area", "track", "manager", "target"]
+                full_revise_used = True
+                mode = "full_revise"
+                _progress(f"3.3/4 第 {round_no} 轮全文改写完成", base + 0.06)
+            else:
+                break
+
+        revise_rounds += 1
+        _progress(
+            f"3.4/4 第 {revise_rounds} 轮增量复审（已提交，等待打分）…",
+            min(base + 0.10, 0.90),
+        )
+        sliced = analyst.slice_tables_for_sections(tables, changed)
+        current_review = reviewer.run_delta_review(
+            full_report=current_report,
+            changed_sections=changed,
+            previous_errors=list(current_payload.get("errors") or []),
+            tables=tables,
+            sliced_tables=sliced,
+        )
+        current_payload = extract_review_payload(current_review)
+        current_score = current_payload.get("score")
+        _remember(mode, current_report, current_review, current_payload, current_score)
+        score_label = str(current_score) if current_score is not None else "未解析"
+        _progress(
+            f"3.4/4 第 {revise_rounds} 轮复审完成，得分 {score_label}",
+            min(base + 0.14, 0.92),
+        )
+
+        if current_score is not None and current_score >= pass_score:
+            _progress(f"3.4/4 复审达标（{current_score}分）", 0.95)
+            break
+
+        if (
+            prev_score_for_gain is not None
+            and current_score is not None
+            and (current_score - prev_score_for_gain) < min_score_gain
+        ):
+            loop_log.append(
+                {
+                    "attempt": len(loop_log),
+                    "mode": "early_stop_no_gain",
+                    "score": current_score,
+                    "prev_score": prev_score_for_gain,
+                    "min_score_gain": min_score_gain,
+                }
+            )
+            _progress(
+                f"3.4/4 分数增益不足（{prev_score_for_gain}→{current_score}），提前结束",
+                0.93,
+            )
+            break
+        prev_score_for_gain = current_score if current_score is not None else prev_score_for_gain
+
+    final_report = best_report or current_report
+    final_review = best_review or current_review
+    review_score = best_score if best_score is not None else current_score
+    _progress("3/4 整理最佳版本报告与审核结果…", 0.96)
+
+    if run_context is not None:
+        run_context.record_value("ai_loop_log", loop_log)
+        if review_score is not None:
+            run_context.record_value("final_review_score", review_score)
+        run_context.record_value(
+            "final_failed_sections",
+            list((best_payload or current_payload).get("failed_sections") or []),
+        )
+        # 确保 result/ 与 ai/ 目录落盘的是最佳版本
+        if final_report:
+            analyst._save_report(final_report, artifact_name="report.md")
+        if final_review:
+            reviewer._save_review(final_review, filename="review.md")
+
     return final_report, final_review, review_score
 
 

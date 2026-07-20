@@ -132,6 +132,25 @@ AGGREGATION_SPECS: dict[str, AggregationSpec] = {
     ),
 }
 
+# 冻结快照：Excel 损坏时回退；内置行参数以此为准
+BUILTIN_AGGREGATION_SPECS: dict[str, AggregationSpec] = {
+    name: AggregationSpec(
+        name=spec.name,
+        sheet_name=spec.sheet_name,
+        csv_name=spec.csv_name,
+        group_cols=list(spec.group_cols),
+        rename_map=dict(spec.rename_map),
+        sort_by=spec.sort_by,
+        ascending=spec.ascending,
+        include_rank=spec.include_rank,
+        rank_col=spec.rank_col,
+        include_top_products=spec.include_top_products,
+        top_n=spec.top_n,
+        top_sort_col=spec.top_sort_col,
+    )
+    for name, spec in AGGREGATION_SPECS.items()
+}
+
 
 @dataclass(frozen=True)
 class TableExportSpec:
@@ -189,6 +208,8 @@ STANDARD_TABLE_DESCRIPTIONS: dict[str, str] = {
     "national_team": "全市场按是否国家队持仓聚合",
 }
 
+BUILTIN_TABLE_DESCRIPTIONS: dict[str, str] = dict(STANDARD_TABLE_DESCRIPTIONS)
+
 
 def get_table_export_meta(name: str) -> tuple[str, str]:
     """返回 (sheet_name, csv_name)。"""
@@ -203,9 +224,14 @@ def get_table_export_meta(name: str) -> tuple[str, str]:
 
 
 def get_table_description(name: str) -> str:
-    if name in EXTRA_TABLE_SPECS:
-        return EXTRA_TABLE_SPECS[name].description
-    return STANDARD_TABLE_DESCRIPTIONS.get(name, "")
+    try:
+        from .table_plugins import get_table_description_from_plugins
+
+        return get_table_description_from_plugins(name)
+    except Exception:
+        if name in EXTRA_TABLE_SPECS:
+            return EXTRA_TABLE_SPECS[name].description
+        return STANDARD_TABLE_DESCRIPTIONS.get(name, "")
 
 
 def validate_agg_schema(name: str, df) -> list[str]:

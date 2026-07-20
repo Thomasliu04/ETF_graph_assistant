@@ -73,6 +73,10 @@ class AppConfig:
         "https://ws-809e4eujqwysgybs.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
     )
     max_retry_times: int = env_int("ETF_AI_REPORT_RETRIES", 2)
+    # 生成-审核 loop：达标分、局部改写轮数、最小分数增益（无增益则熔断）
+    pass_score: int = env_int("ETF_AI_PASS_SCORE", 80)
+    max_revise_rounds: int = env_int("ETF_AI_MAX_REVISE_ROUNDS", 2)
+    min_score_gain: int = env_int("ETF_AI_MIN_SCORE_GAIN", 5)
     request_timeout: int = env_int("ETF_AI_REQUEST_TIMEOUT", 300)
     request_retries: int = env_int("ETF_AI_REQUEST_RETRIES", 2)
 
