@@ -4,8 +4,10 @@ from pathlib import Path
 
 try:
     from .contracts import META
+    from .providers import get_provider, resolve_chat_completions_url
 except ImportError:
     from contracts import META
+    from providers import get_provider, resolve_chat_completions_url
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -66,12 +68,10 @@ class AppConfig:
     period_end: str = META.period_end
     target_company: str = META.target_company
     data_contract_version: str = META.version
+    # ETF_AI_API_TYPE：厂商预设 key（见 providers.py）；ETF_AI_BASE_URL 可选覆盖
     api_type: str = env_str("ETF_AI_API_TYPE", "aliyun")
     model_name: str = env_str("ETF_AI_MODEL_NAME", "qwen3.7-plus")
-    base_url: str = env_str(
-        "ETF_AI_BASE_URL",
-        "https://ws-809e4eujqwysgybs.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
-    )
+    base_url: str = env_str("ETF_AI_BASE_URL", "")
     max_retry_times: int = env_int("ETF_AI_REPORT_RETRIES", 2)
     # 生成-审核 loop：达标分、局部改写轮数、最小分数增益（无增益则熔断）
     pass_score: int = env_int("ETF_AI_PASS_SCORE", 80)
@@ -85,7 +85,14 @@ class AppConfig:
         return os.getenv("ETF_AI_API_KEY") or os.getenv("DASHSCOPE_API_KEY") or os.getenv("OPENAI_API_KEY")
 
     @property
+    def resolved_base_url(self) -> str:
+        """展示用：实际生效的 API root（不含 /chat/completions）。"""
+        override = self.base_url.strip()
+        if override:
+            return override.rstrip("/")
+        return get_provider(self.api_type).default_base_url.rstrip("/")
+
+    @property
     def chat_completions_url(self) -> str:
-        if self.api_type == "openai":
-            return "https://api.openai.com/v1/chat/completions"
-        return f"{self.base_url.rstrip('/')}/chat/completions"
+        override = self.base_url.strip() or None
+        return resolve_chat_completions_url(self.api_type, override)

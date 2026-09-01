@@ -1,7 +1,10 @@
 .env
+.env.local
+.env.*.local
 .venv/
 __pycache__/
 *.pyc
+*.pyo
 runs/
 .idea/
 data/
@@ -9,3 +12,5 @@ output/
 result/
 _backup_before_refactor_*/
 .DS_Store
+*.zip
+.cursor/

@@ -151,20 +151,27 @@ class AIReviewer:
         timeout: int = 120,
         max_retries: int = 2,
         run_context: RunContext | None = None,
+        *,
+        api_url: str | None = None,
+        client: LLMClient | None = None,
     ):
         self.api_key = api_key
         self.base_url = base_url
         self.model_name = model_name
-        self.api_url = f"{base_url.rstrip('/')}/chat/completions"
         self.run_context = run_context
-        self.client = LLMClient(
-            api_key=api_key,
-            api_url=self.api_url,
-            model_name=model_name,
-            timeout=timeout,
-            max_retries=max_retries,
-            run_context=run_context,
-        )
+        if client is not None:
+            self.client = client
+            self.api_url = client.api_url
+        else:
+            self.api_url = api_url or f"{base_url.rstrip('/')}/chat/completions"
+            self.client = LLMClient(
+                api_key=api_key,
+                api_url=self.api_url,
+                model_name=model_name,
+                timeout=timeout,
+                max_retries=max_retries,
+                run_context=run_context,
+            )
 
         script_dir = Path(__file__).parent
         self.project_root = script_dir.parent

@@ -53,6 +53,9 @@ class ETFAIAnalyst:
         max_retries: int = 2,
         run_context: RunContext | None = None,
         target_company: str | None = None,
+        *,
+        api_url: str | None = None,
+        client: LLMClient | None = None,
     ):
         self.api_key = api_key
         self.model = model_name
@@ -66,21 +69,27 @@ class ETFAIAnalyst:
         with open(skill_md, "r", encoding="utf-8") as f:
             self.skill_prompt = f.read()
 
-        if api_type == "aliyun":
-            default_base_url = "https://ws-809e4eujqwysgybs.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-            self.api_url = f"{(base_url or default_base_url).rstrip('/')}/chat/completions"
-        elif api_type == "openai":
-            self.api_url = f"{(base_url or 'https://api.openai.com/v1').rstrip('/')}/chat/completions"
+        if client is not None:
+            self.client = client
+            self.api_url = client.api_url
         else:
-            raise ValueError("api_type仅支持aliyun或openai")
-        self.client = LLMClient(
-            api_key=api_key,
-            api_url=self.api_url,
-            model_name=model_name,
-            timeout=timeout,
-            max_retries=max_retries,
-            run_context=run_context,
-        )
+            if api_url:
+                self.api_url = api_url
+            else:
+                try:
+                    from .providers import resolve_chat_completions_url
+                except ImportError:
+                    from providers import resolve_chat_completions_url
+
+                self.api_url = resolve_chat_completions_url(api_type, base_url)
+            self.client = LLMClient(
+                api_key=api_key,
+                api_url=self.api_url,
+                model_name=model_name,
+                timeout=timeout,
+                max_retries=max_retries,
+                run_context=run_context,
+            )
 
     def df_to_json(self, df: pd.DataFrame) -> str:
         data = df.round(2).to_dict(orient="records")

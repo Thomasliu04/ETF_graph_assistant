@@ -1,68 +1,138 @@
 # ETF Graph Assistant
 
-一个用于 ETF 底表数据计算、可视化、AI 分析和 AI 审核的 Python 项目。
+用 **pandas 做确定性计算**、用 **LLM 写分析报告并交叉审核** 的 ETF 底表分析工具。
 
-项目设计原则是：确定性数据计算由 `pandas` 完成，AI 只负责观察、总结和发现；字段口径集中在数据契约层；每次运行都会保留输入、聚合表、图表、Prompt、模型请求/响应和运行清单，方便复核和审计。
+同事接手时：
+
+1. 勾选 [`docs/同事上手清单.md`](docs/同事上手清单.md)  
+2. 按本文「5 分钟上手」跑通  
+3. 扩展聚合表读 [`docs/如何新增一张聚合表.md`](docs/如何新增一张聚合表.md)
+
+---
+
+## 5 分钟上手
+
+```bash
+# 1) 进入项目
+cd /path/to/ETF_graph_assistant
+
+# 2) 虚拟环境 + 依赖
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+
+# 3) 配置密钥（不要把真实 Key 写进代码或提交 Git）
+cp .env.example .env
+# 编辑 .env，至少填写：
+#   ETF_AI_API_KEY=你的Key
+#   ETF_AI_API_TYPE=aliyun          # 或 deepseek / zhipu / moonshot 等，见 scripts/providers.py
+#   ETF_AI_MODEL_NAME=qwen3.7-plus
+
+# 4) 准备底表：放到 data/etf底表.xlsx（或 Web 里上传）
+#    默认 Sheet 名见 scripts/contracts/meta.py → sheet_name
+
+# 5) 启动网页（推荐）
+streamlit run web.py
+```
+
+网页左侧点 **一键分析** → 下载 Excel → 在「AI 报告」查看生成/审核结果。
+
+没有 API Key 时仍会完成转换、聚合和 Excel 导出，只是跳过 AI。
+
+命令行完整跑一遍：
+
+```bash
+python scripts/main.py
+```
+
+快速自检：
+
+```bash
+# Key 是否读到（不打印内容）
+python - <<'PY'
+from scripts.config import AppConfig
+c = AppConfig()
+print("api_key_loaded", bool(c.api_key), "type", c.api_type, "model", c.model_name)
+PY
+
+# 聚合登记表 / 内置表是否正常
+python -m scripts.tests.test_agg_parity
+```
+
+---
+
+## 这个系统在做什么
+
+| 步骤 | 谁做 | 产出 |
+|------|------|------|
+| 底表校验、聚合、增速/TOP 产品 | pandas（确定性） | `result/ETF聚合汇总表.xlsx` |
+| 写研报式分析 | 分析 LLM | `result/AI数据分析报告…md` |
+| 打分 + 错误清单 + 重写指令 | 审核 LLM | `result/AI审核报告.md` |
+| 低分时按章节改写再复审 | 流水线 loop | 保留最高分版本 |
+
+设计原则：**数字以表为准，AI 只总结与挑错**；每次运行写入 `runs/{run_id}/` 便于复核。
+
+当前 AI 流程不是「盲着重生成」，而是：
+
+```text
+全文生成 → 结构化审核
+  → 分数达标则结束
+  → 否则按失败章节局部改写（或一次全文反馈改写）→ 增量复审
+  → 达标 / 增益不足 / 达到改写轮数上限则停，保留最佳版本
+```
+
+---
 
 ## 功能概览
 
-- 将 ETF 底表 Excel 转为 CSV。
-- 基于数据契约校验底表字段与平衡公式。
-- 基于底表计算聚合表（当前默认）：
-  - 区域维度：A股 / 港股 / 其他跨境
-  - 赛道维度：按赛道聚合，并提取每个赛道增量 TOP3 产品
-  - 管理人维度：按基金公司聚合，并提取每个管理人增量 TOP3 产品
-  - 国家队维度：按是否国家队持仓聚合
-  - 目标公司切片：总览、分区域、分赛道、增量/缩水产品梯队（默认银华，含全称别名匹配）
-- **主交付物：多 sheet Excel 聚合汇总表**（含目录页；可用 Excel 自行制图）。
-- Web「一键分析」：上传底表后自动完成转换、聚合、Excel 导出、AI 报告与审核。
-- 调用大模型生成 ETF 分析报告（输入含目标公司切片，减少编造）。
-- 调用审核模型校验报告；低分自动重试重写。
-- 图表仅为可选预览，默认不生成。
-- 为每次运行生成独立审计目录 `runs/{run_id}/`。
+- Excel ↔ CSV 转换；契约校验字段与平衡公式  
+- 默认聚合：区域 / 赛道 / 管理人 / 国家队 + 目标公司切片（默认银华）  
+- **主交付物**：多 sheet「ETF聚合汇总表.xlsx」（含目录页）  
+- Web 一键分析：分阶段进度条；报告阅读默认隐藏「来源：…」，出处集中展示  
+- 标准聚合可用 **`configs/聚合登记表.xlsx`** 加行扩展（无需改 Python）  
+- 多厂商 OpenAI 兼容接口预设（`scripts/providers.py`）  
+- 图表仅为可选预览，默认不生成  
 
-## 项目结构
+---
+
+## 项目结构（接手时看这些）
 
 ```text
 .
-├── data/
-│   ├── etf底表.xlsx
-│   └── etf底表.csv
-├── output/
-│   └── 可选图表预览（默认不生成）
-├── result/
-│   ├── ETF聚合汇总表.xlsx   # 主交付物
-│   ├── AI数据分析报告第一版测试.md
-│   └── AI审核报告.md
-├── runs/
-│   └── 每次运行的完整审计留痕（含同名 Excel）
+├── web.py                 # Streamlit 入口（日常推荐）
+├── skills.md              # 分析模型写作规范
+├── skill_check.md         # 审核打分与 JSON 输出规范
+├── configs/
+│   └── 聚合登记表.xlsx     # 非开发扩展标准聚合（勿乱改内置四行）
+├── docs/
+│   └── 如何新增一张聚合表.md
 ├── scripts/
-│   ├── contracts/         # 数据契约（字段、校验、聚合 schema）
-│   │   ├── meta.py        # 版本、区间、sheet、目标公司
-│   │   ├── base_table.py  # 底表列名、别名、平衡规则
-│   │   └── aggregations.py# AggregationSpec 与输出列
-│   ├── calculations/      # 非标准聚合（目标公司切片等）
-│   ├── pipeline.py        # CLI/Web 共用一键流水线
-│   ├── config.py          # 路径与模型配置（口径默认值来自契约）
-│   ├── data_calc.py       # pandas 确定性计算与 Excel 导出
-│   ├── visual_plot.py     # 可选图表预览
-│   ├── llm_client.py      # 大模型请求封装
-│   ├── ai_analyst.py      # AI 分析报告生成
-│   ├── review_ai.py       # AI 审核
-│   ├── run_context.py     # 运行留痕
-│   ├── main.py            # 命令行主入口
-│   └── qwen.py            # 简单模型连通性测试
-├── skills.md              # 分析模型使用的 Skill
-├── skill_check.md         # 审核模型使用的 Skill
-├── ROLLBACK.md            # 改造过程中的回退指南
-├── web.py                 # Streamlit 页面
+│   ├── main.py            # CLI 入口
+│   ├── pipeline.py        # 一键流水线 + AI 改写 loop
+│   ├── config.py          # 环境变量 / 路径
+│   ├── providers.py       # 厂商 base_url 预设
+│   ├── data_calc.py       # pandas 计算与 Excel 导出
+│   ├── contracts/         # 数据契约（口径单一事实来源）
+│   │   ├── meta.py
+│   │   ├── base_table.py
+│   │   ├── aggregations.py
+│   │   └── table_plugins.py   # 读取聚合登记表
+│   ├── calculations/      # 复杂切片（如目标公司）
+│   ├── ai_analyst.py / review_ai.py
+│   ├── report_sections.py / report_display.py
+│   └── tests/test_agg_parity.py
+├── data/                  # 底表（本地，通常不入库）
+├── result/                # 最近一次导出（本地）
+├── runs/                  # 每次运行审计目录（本地）
 ├── requirements.txt
 └── .env.example
 ```
 
-## 安装依赖
+---
 
-建议先创建虚拟环境：
+## 安装与配置
+
+### 依赖
 
 ```bash
 python -m venv .venv
@@ -70,363 +140,147 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-如果你使用 PyCharm，也可以在项目解释器中安装 `requirements.txt`。
-
-## 配置 API Key
-
-项目不会在代码里保存真实 API Key。推荐使用本地 `.env` 文件保存密钥，`.env.example` 只保留模板。
-
-### 推荐方式：使用 `.env`
-
-复制模板文件：
+### `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-然后编辑 `.env`，写入真实 API Key：
+常用项：
 
-```text
-ETF_AI_API_KEY=你的真实APIKey
-ETF_AI_API_TYPE=aliyun
-ETF_AI_MODEL_NAME=qwen3.7-plus
-ETF_AI_BASE_URL=https://你的兼容OpenAI接口地址/v1
-ETF_AI_REQUEST_TIMEOUT=300
-ETF_AI_REQUEST_RETRIES=2
-```
+| 变量 | 含义 | 默认/示例 |
+|------|------|-----------|
+| `ETF_AI_API_KEY` | 密钥 | 必填才跑 AI |
+| `ETF_AI_API_TYPE` | 厂商预设 key | `aliyun` |
+| `ETF_AI_MODEL_NAME` | 模型名 | `qwen3.7-plus` |
+| `ETF_AI_BASE_URL` | 覆盖预设 base（一般留空） | 空则用 `providers.py` |
+| `ETF_AI_PASS_SCORE` | 审核达标分 | `80` |
+| `ETF_AI_MAX_REVISE_ROUNDS` | 局部改写最多轮数 | `2` |
+| `ETF_AI_MIN_SCORE_GAIN` | 分数增益不足则停 | `5` |
+| `ETF_AI_REQUEST_TIMEOUT` | 单次请求超时秒 | `300` |
 
-之后直接运行主程序即可，代码会自动读取项目根目录下的 `.env`：
+也支持 `DASHSCOPE_API_KEY` / `OPENAI_API_KEY` 作为 Key 的备选名。
 
-```bash
-python scripts/main.py
-```
+换厂商时改 `ETF_AI_API_TYPE` + `ETF_AI_MODEL_NAME` + Key 即可；示例见 `.env.example`。支持的 type 列表：
 
-`.env` 已经被 `.gitignore` 忽略，不应提交到 Git。`.env.example` 可以提交，但只能放占位符：
+`aliyun` · `dashscope` · `deepseek` · `zhipu` · `moonshot` · `siliconflow` · `volcengine` · `openai` · `custom`
 
-```text
-ETF_AI_API_KEY=replace_with_your_api_key
-```
+---
 
-### 可选方式：终端临时设置
+## 日常怎么用
 
-如果不想使用 `.env`，也可以在当前终端临时设置：
-
-```bash
-export ETF_AI_API_KEY="你的API Key"
-python scripts/main.py
-```
-
-程序支持以下环境变量名，优先级为：
-
-1. `ETF_AI_API_KEY`
-2. `DASHSCOPE_API_KEY`
-3. `OPENAI_API_KEY`
-
-注意：不要把真实 key 写入 `.env.example`、README 或代码文件。如果真实 key 曾经上传到 GitHub 或发给别人，建议到模型服务平台后台轮换 key。
-
-如果请求国内模型 endpoint 容易超时，可以在 `.env` 中调大：
-
-```text
-ETF_AI_REQUEST_TIMEOUT=600
-ETF_AI_REQUEST_RETRIES=3
-```
-
-如果你的 API Key 来自不同 workspace 或不同服务商，需要同步修改：
-
-```text
-ETF_AI_BASE_URL=你的实际base_url
-ETF_AI_MODEL_NAME=你的实际模型名
-```
-
-## 命令行运行
-
-完整运行：
-
-```bash
-python scripts/main.py
-```
-
-运行流程：
-
-1. 读取 `data/etf底表.xlsx`
-2. 转换为 `data/etf底表.csv`
-3. 按数据契约校验底表
-4. 执行 pandas 聚合计算（含目标公司切片）
-5. 导出主交付物 `result/ETF聚合汇总表.xlsx`（多 sheet + 目录页）
-6. 如已配置 API Key，生成 AI 分析报告并审核
-7. 将本次运行留痕保存到 `runs/{run_id}/`（含同名 Excel 与契约摘要）
-
-如果没有配置 API Key，程序仍会完成转换、聚合和 Excel 导出，然后跳过 AI 阶段。图表默认不生成。
-
-## Web 页面运行
+### Web（推荐）
 
 ```bash
 streamlit run web.py
 ```
 
-页面支持：
+1. 上传底表或使用 `data/etf底表.xlsx`  
+2. 确认侧边栏 API Key / 模型  
+3. **一键分析**（进度：转换 → 聚合 → AI 子步骤 3.1～3.4）  
+4. 下载 Excel；在「AI 报告」阅读（默认隐藏出处，可开关显示）  
+5. 「概览 → 已加载聚合」确认登记表是否生效  
+6. 「历史运行」回溯某次 `run_id`  
 
-- 上传新的 Excel 底表
-- **一键分析**（转换 + 聚合 + 导出 Excel + AI）
-- 下载多 sheet「ETF聚合汇总表.xlsx」（主交付物）
-- 预览各聚合表；可选生成简易图表预览
-- 输入 API Key 后生成 AI 分析报告并执行审核
-- 查看历史运行中的报告、Excel、审核结果
-
-Web 使用建议（推荐）：
-
-1. 在左侧上传底表，或直接使用默认 `data/etf底表.xlsx`。
-2. 确认已配置 API Key（`.env` 或侧边栏输入）。
-3. 点击 **一键分析**：自动完成转换 → 校验聚合 → **导出 Excel** → AI 报告 → 审核。
-4. 在侧边栏或「导出 Excel」页下载汇总表，再用 Excel 自行制图。
-5. 「图表预览」页仅作可选预览，不是主流程。
-6. 在 `历史运行` 页可下载该次运行的 Excel / 报告 / 审核结果。
-
-目标公司默认是契约中的 `银华基金`，并通过别名匹配底表中的「银华基金管理股份有限公司」。若要换公司，修改 `scripts/contracts/meta.py` 的 `target_company` / `target_company_aliases`。
-
-## Excel 导出说明
-
-`ETF聚合汇总表.xlsx` 结构：
-
-1. **目录**：列出各工作表名称、说明、行数
-2. 区域 / 赛道 / 管理人 / 国家队 等全市场聚合表
-3. 目标公司总览、分区域、分赛道、产品明细、增量/缩水梯队
-
-数值默认保留 4 位小数，便于在 Excel 中继续计算或插入图表。文件同时写入：
-
-- `result/ETF聚合汇总表.xlsx`
-- `runs/{run_id}/ETF聚合汇总表.xlsx`
-
-## 审计留痕
-
-每次运行会生成一个目录：
-
-```text
-runs/{run_id}/
-├── input/                 # 本次使用的输入文件副本
-├── tables/                # 聚合后的 CSV 表
-├── charts/                # 本次运行生成的图表
-├── prompts/               # 分析和审核 Prompt
-├── ai/                    # AI request / response / report / review
-└── run_manifest.json      # 运行清单
-```
-
-`run_manifest.json` 会记录：
-
-- 运行 ID
-- 创建时间
-- git commit
-- 配置信息（含 `data_contract_version`）
-- `data_contract`：本次使用的完整契约摘要
-- 输入文件 hash
-- 输出文件 hash
-- 数据校验结果
-- 最终审核得分
-
-这使得每次报告都可以追溯到当时的输入数据、计算结果、口径版本、Prompt 和模型原始返回。
-
-## 数据契约
-
-`scripts/contracts/` 是字段名、统计区间、行级校验规则和聚合输出 schema 的**单一事实来源**。当前版本：`data_contract_version = 0.3.0`。
-
-| 文件 | 内容 |
-|------|------|
-| `meta.py` | 契约版本、sheet 名、统计区间、目标公司、校验容差 |
-| `base_table.py` | 底表标准列名（`BaseCols`）、别名、必要/数值列、平衡公式 |
-| `aggregations.py` | 聚合输出列（`AggCols`）、`AggregationSpec` 注册表、输出 schema 校验 |
-
-`AppConfig` 与 `ETFDataCalculator` 都从契约读取默认口径；计算完成后还会按契约检查聚合表是否缺列。
-
-### 换报告期或改列名时改哪里
-
-1. 改 `scripts/contracts/meta.py`（区间、sheet、目标公司等）。
-2. 若底表物理列名变化，改 `scripts/contracts/base_table.py`（`BaseCols` / 别名 / 必要列）。
-3. 若聚合维度或输出列变化，改 `scripts/contracts/aggregations.py`。
-4. 同步提升 `META.version`，并更新 `skills.md` / `skill_check.md` 中的 `data_contract_version`。
-
-不建议再在 `data_calc.py`、图表标题或 Prompt 里散落硬编码同一套中文列名与日期。
-
-### 快速查看当前契约
+### CLI
 
 ```bash
-python - <<'PY'
-from scripts.contracts import META, contract_manifest
-print(META.version, META.period_title, META.target_company)
-print(sorted(contract_manifest()["aggregation_specs"]))
-PY
+python scripts/main.py
 ```
 
-## 数据校验
+流程：读底表 → 转 CSV → 校验 → 聚合（含目标公司）→ 导出 Excel →（有 Key 则）AI 生成与审核 → 写入 `runs/{run_id}/`。
 
-`scripts/data_calc.py` 在计算前执行契约中的字段与平衡校验（定义见 `scripts/contracts/base_table.py`）。
+---
 
-必要字段由 `REQUIRED_COLUMNS` 声明，当前包括：
+## 主交付物与审计
 
-- `前6位代码`、`基金简称`、`基金公司`
-- `25Q4`、`26Q2`、`增量26H1`、`增速26H1%`
-- `26H1新发`、`26H1净值`、`26H1持营`
-- `赛道（结合区域和主题打标）`
-- `A股、港股or其他跨境`
+**Excel**：`result/ETF聚合汇总表.xlsx`（同时有一份在 `runs/{run_id}/`）
 
-当前平衡规则（`BALANCE_RULES`）：
+- 首表「目录」  
+- 全市场聚合 + 目标公司切片  
 
-- `增量26H1 = 26Q2 - 25Q4`
-- `增量26H1 = 26H1新发 + 26H1净值 + 26H1持营`
-
-默认容差为 `0.02`（亿元）。校验失败会直接报错，避免后续 AI 基于错误数据生成报告。
-
-可选维度列（如 `是否国家队`）不在必要字段中；只有当你执行对应聚合时才会要求底表存在该列。
-
-## Skill 文件
-
-`skills.md` 定义分析模型的任务、输入格式和输出要求。
-
-`skill_check.md` 定义审核模型的校验规则、扣分规则和固定输出格式。
-
-修改这两个文件会影响 AI 输出行为。`data_contract_version` 应与 `scripts/contracts/meta.py` 中的版本保持一致；重要口径变更后请同步升级。
-
-## 配置修改
-
-路径与模型相关配置在 `scripts/config.py`：
-
-- 输入文件路径
-- 输出目录
-- 模型名称
-- base_url
-- 最大重试次数
-- 请求超时时间
-
-以下默认值来自 `scripts/contracts/meta.py`，也可在构造 `AppConfig(...)` 时覆盖：
-
-- Excel sheet 名
-- 统计区间
-- 目标公司
-- `data_contract_version`
-
-默认模型配置为阿里云兼容 OpenAI Chat Completions 的接口。
-
-## 扩展新的聚合计算
-
-**非开发同学（推荐）**：打开 `configs/聚合登记表.xlsx`，在「标准聚合」sheet **新增一行**（不要改「是否内置=是」的四行），保存后重启 Web / 再跑一键分析。  
-详细步骤见 [`docs/如何新增一张聚合表.md`](docs/如何新增一张聚合表.md)。
-
-系统会把登记表行转成 `AggregationSpec`，仍调用现有的 `calc_aggregation`（groupby + 求和 + 增速 + 可选排名/TOP），**不会改旧表算法**。登记表损坏时自动回退到代码内置四表。
-
-网页「概览 → 已加载聚合」可确认新表是否加载成功。
-
-### 开发同学：复杂切片
-
-若不是「按底表某一列汇总」（例如目标公司筛选/多表拼接），请在 `scripts/calculations/` 新增计算模块，并继续用 `EXTRA_TABLE_SPECS` 登记导出元数据。目标公司逻辑本轮保持不变。
-
-### 兼容说明（旧 Python 注册方式）
-
-标准聚合的代码回退源仍在 `scripts/contracts/aggregations.py` 的 `BUILTIN_AGGREGATION_SPECS`。日常扩展请优先改 Excel 登记表，避免两套配置漂移。
-
-### 新增带 TOP 产品的聚合（Excel）
-
-在登记表对应行将「是否TOP产品」设为「是」，「TOP数量」填 `3` 即可。
-
-### 让 AI 分析新增表
-
-登记表中将「送给AI」设为「是」，并填写「AI标题」「AI顺序」「报告章节」。若还需要模型「怎么写分析话术」，再在 `skills.md` / `skill_check.md` 补一两句业务说明。
-
-### 什么时候不要用登记表 / AggregationSpec
-
-如果计算逻辑不是标准 groupby，例如环比趋势、分位数、集中度、多期时间序列，或目标公司类筛选拼接，请在 `scripts/calculations/` 由开发新增模块，而不是硬塞进登记表。
-
-## 回退与备份
-
-扩展性改造期间请优先阅读：
+**审计目录** `runs/{run_id}/`：
 
 ```text
-ROLLBACK.md
+input/  tables/  prompts/  ai/  run_manifest.json
 ```
 
-当前保护措施包括：
+`run_manifest.json` 含契约版本、配置、`ai_loop_log`、最终得分等。
 
-| 类型 | 位置 | 说明 |
-|------|------|------|
-| Git 基线标签 | `baseline-before-extensibility` | 回退改造前代码 |
-| 开发分支 | `refactor/extensibility` | 新改动应在此分支进行 |
-| 完整目录副本 | `../ETF_graph_assistant_baseline_20260716/` | 含 `.env`、底表、结果、runs |
-| 旧代码备份 | `_backup_before_refactor_20260708/` | 更早一版实现对照 |
+---
 
-日常开发建议在 `refactor/extensibility` 分支进行；需要干净基线时切回 `main` 或重置到上述标签。详情与命令见 `ROLLBACK.md`。
+## 数据契约（改口径先改这里）
+
+`scripts/contracts/` 是字段、区间、校验与聚合 schema 的单一事实来源。当前 `data_contract_version` 见 `meta.py`。
+
+| 文件 | 改什么 |
+|------|--------|
+| `meta.py` | 报告期、sheet 名、目标公司别名、版本号 |
+| `base_table.py` | 底表列名、别名、必要列、平衡公式 |
+| `aggregations.py` | 内置 AggregationSpec 回退源、导出元数据 |
+| `table_plugins.py` | Excel 登记表加载逻辑 |
+
+换报告期 / 列名时：改契约 → 同步 `skills.md` / `skill_check.md` 的 `data_contract_version` → 必要时 bump `META.version`。
+
+目标公司默认「银华基金」，别名匹配「银华基金管理股份有限公司」。换公司改 `meta.py` 的 `target_company` / `target_company_aliases`。
+
+---
+
+## 扩展聚合表
+
+- **标准 groupby**：编辑 `configs/聚合登记表.xlsx`（见 [`docs/如何新增一张聚合表.md`](docs/如何新增一张聚合表.md)）  
+- **复杂切片**（筛选公司、多表拼接）：开发在 `scripts/calculations/` 写模块  
+- 登记表坏了会**自动回退**代码内置四表（area/track/manager/national_team），一键分析仍可跑  
+
+---
+
+## AI Skill
+
+- `skills.md`：分析写作、章节锚点、百分比写法、来源标注  
+- `skill_check.md`：扣分规则、文末 JSON（score / errors / failed_sections）  
+
+改这两个文件会直接影响报告与审核行为。
+
+---
 
 ## 常见问题
 
-### 1. `ModuleNotFoundError: No module named 'pandas'`
+**1. 没有 `pandas` / `streamlit`**  
+`pip install -r requirements.txt`，并确认激活了 `.venv`。
 
-说明当前 Python 环境没有安装依赖。执行：
+**2. 没有 AI 报告**  
+检查 `.env` 是否有 Key；侧边栏也可临时粘贴。无 Key 时仍导出 Excel。
+
+**3. 鉴权失败 / 超时**  
+核对 `ETF_AI_API_TYPE`、`ETF_AI_MODEL_NAME`、Key 与厂商是否匹配；可调大 `ETF_AI_REQUEST_TIMEOUT`。`ETF_AI_BASE_URL` 不要带 `/chat/completions`。
+
+**4. Sheet 找不到**  
+默认 sheet 在 `scripts/contracts/meta.py` 的 `sheet_name`。底表 sheet 名变了就改契约。
+
+**5. 缺字段或平衡校验失败**  
+对照 `base_table.py` 的 `REQUIRED_COLUMNS` / `BALANCE_RULES`；别名变化加到 `COLUMN_ALIASES`。
+
+**6. Web 看起来像旧版**  
+确认当前目录是本仓库（不是别的副本），强刷浏览器；新版概览有「已加载聚合」，AI 报告有「显示行内出处」开关。
+
+**7. 一键分析很慢**  
+耗时主要在阶段 3（LLM）。进度条会显示 3.1 生成 / 3.2 审核 / 3.3 改写 / 3.4 复审。
+
+---
+
+## Git 与分支
+
+- 远程：`git@github.com:Thomasliu04/ETF_graph_assistant.git`  
+- 当前主线代码在 `main`（与功能分支 `refactor/extensibility` 已对齐过）  
+- 不要提交 `.env`、`data/`、`runs/`、`result/`（已在 `.gitignore`）  
+
+本地改乱且未推送时：
 
 ```bash
-pip install -r requirements.txt
+git status
+git restore .
+# 慎用：删除未跟踪文件
+# git clean -fd
 ```
 
-### 2. 没有生成 AI 报告
-
-检查项目根目录是否存在 `.env`，并且内容类似：
-
-```text
-ETF_AI_API_KEY=你的真实APIKey
-```
-
-也可以用下面命令检查程序是否能读到 key。命令只会输出是否读取成功和 key 长度，不会打印 key 内容：
-
-```bash
-python - <<'PY'
-from scripts.config import AppConfig
-key = AppConfig().api_key
-print("api_key_loaded", bool(key))
-print("api_key_length", len(key) if key else 0)
-PY
-```
-
-如果没有设置成功，程序会跳过 AI 阶段。
-
-### 3. 审核模型报鉴权错误
-
-检查 API Key、base_url 和模型名是否匹配你的服务商配置。
-
-### 4. AI 请求超时
-
-如果出现类似：
-
-```text
-Read timed out
-```
-
-说明程序已经连到了模型 endpoint，但服务没有在限定时间内返回。优先检查：
-
-- 当前网络是否能稳定访问 `.env` 中的 `ETF_AI_BASE_URL`
-- API Key 是否属于该 workspace / endpoint
-- `ETF_AI_MODEL_NAME` 是否可用
-- 是否需要代理或 VPN
-
-可以先在 `.env` 中调大超时和重试：
-
-```text
-ETF_AI_REQUEST_TIMEOUT=600
-ETF_AI_REQUEST_RETRIES=3
-```
-
-如果仍然超时，建议先换一个更小/更快的模型做连通性测试，确认 endpoint 和 key 没问题后再跑完整报告。
-
-### 5. Excel sheet 找不到
-
-当前默认 sheet 名定义在 `scripts/contracts/meta.py`：
-
-```text
-260630股票etf底表
-```
-
-如果底表 sheet 名变化，请修改契约中的 `sheet_name`，或在构造 `AppConfig` 时覆盖。
-
-### 6. 底表缺字段或平衡校验失败
-
-报错信息会指出缺失列或不满足的平衡公式。请对照：
-
-- `scripts/contracts/base_table.py` 中的 `REQUIRED_COLUMNS` / `BALANCE_RULES`
-- 本次运行 `run_manifest.json` 里的 `data_contract` 与 `input_validation`
-
-若只是列名别名变化，优先在契约的 `COLUMN_ALIASES` 中增加映射，而不是改计算逻辑。
+更细的历史回退说明见 [`ROLLBACK.md`](ROLLBACK.md)（部分旧本地备份目录已删除，以 GitHub 为准）。

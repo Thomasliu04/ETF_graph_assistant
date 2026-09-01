@@ -81,7 +81,8 @@ def build_run_context(config: AppConfig, source_xlsx: Path | None = None) -> Run
             "target_company": config.target_company,
             "api_type": config.api_type,
             "model_name": config.model_name,
-            "base_url": config.base_url,
+            "base_url": config.resolved_base_url,
+            "chat_completions_url": config.chat_completions_url,
             "max_retry_times": config.max_retry_times,
             "pass_score": config.pass_score,
             "max_revise_rounds": config.max_revise_rounds,
@@ -159,19 +160,21 @@ def run_ai_with_review(
         api_key=api_key,
         model_name=config.model_name,
         api_type=config.api_type,
-        base_url=config.base_url,
+        base_url=config.base_url or None,
         timeout=config.request_timeout,
         max_retries=config.request_retries,
         run_context=run_context,
         target_company=config.target_company,
+        api_url=config.chat_completions_url,
     )
     reviewer = AIReviewer(
         api_key=api_key,
-        base_url=config.base_url,
+        base_url=config.resolved_base_url,
         model_name=config.model_name,
         timeout=config.request_timeout,
         max_retries=config.request_retries,
         run_context=run_context,
+        api_url=config.chat_completions_url,
     )
 
     pass_score = config.pass_score

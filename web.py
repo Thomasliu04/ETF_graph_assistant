@@ -690,7 +690,8 @@ with st.sidebar:
     env_key = CONFIG.api_key or ""
     api_key = st.text_input("API Key", value=env_key, type="password", placeholder="读取 .env 或手动输入")
     st.text_input("模型", CONFIG.model_name, disabled=True)
-    st.text_input("Base URL", CONFIG.base_url, disabled=True)
+    st.text_input("厂商", CONFIG.api_type, disabled=True)
+    st.text_input("Base URL", CONFIG.resolved_base_url, disabled=True)
     st.caption(
         f"目标公司 {CONFIG.target_company} · timeout {CONFIG.request_timeout}s · "
         f"请求重试 {CONFIG.request_retries}"

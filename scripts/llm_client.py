@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import requests
 
@@ -9,6 +9,9 @@ try:
     from .run_context import RunContext
 except ImportError:
     from run_context import RunContext
+
+if TYPE_CHECKING:
+    from .config import AppConfig
 
 
 class LLMClient:
@@ -27,6 +30,23 @@ class LLMClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self.run_context = run_context
+
+    @classmethod
+    def from_config(
+        cls,
+        config: "AppConfig",
+        api_key: str,
+        run_context: RunContext | None = None,
+    ) -> "LLMClient":
+        """统一入口：业务侧只传 AppConfig，厂商差异由 providers + config 解析。"""
+        return cls(
+            api_key=api_key,
+            api_url=config.chat_completions_url,
+            model_name=config.model_name,
+            timeout=config.request_timeout,
+            max_retries=config.request_retries,
+            run_context=run_context,
+        )
 
     def chat(
         self,
